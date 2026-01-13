@@ -487,5 +487,147 @@ def live_collect(ctx: click.Context, username: str, session_file: Path, html: bo
     click.echo("\nDone!")
 
 
+# Cloud sync commands
+@cli.group()
+def sync() -> None:
+    """Cloud sync - push/pull data to view in dashboard."""
+    pass
+
+
+@sync.command(name="push")
+@click.option(
+    "--passphrase",
+    "-p",
+    required=True,
+    help="Passphrase to encrypt your data (remember this!)",
+)
+@click.option(
+    "--api-url",
+    default=None,
+    help="Custom API URL (default: production dashboard)",
+)
+@click.pass_context
+def sync_push(ctx: click.Context, passphrase: str, api_url: str | None) -> None:
+    """Push your data to the cloud for viewing in the dashboard.
+
+    Your data is encrypted with your passphrase before upload.
+    The server cannot read your data - only you can decrypt it.
+    """
+    if len(passphrase) < 6:
+        click.echo("Error: Passphrase must be at least 6 characters", err=True)
+        sys.exit(1)
+
+    try:
+        from instagram_audit.sync import SyncClient, derive_key_hash
+    except ImportError as e:
+        click.echo(f"Error: {e}", err=True)
+        click.echo("Install with: pip install cryptography requests", err=True)
+        sys.exit(1)
+
+    db_path = ctx.obj["db_path"]
+    conn = get_connection(db_path)
+    dao = SnapshotDAO(conn)
+
+    # Get latest snapshot
+    snapshot = dao.get_latest_snapshot()
+    if not snapshot:
+        click.echo("Error: No snapshots found. Run 'audit run' first.", err=True)
+        conn.close()
+        sys.exit(1)
+
+    click.echo(f"Preparing data from snapshot {snapshot.snapshot_id}...")
+
+    # Build sync payload
+    payload = {
+        "snapshot": {
+            "id": snapshot.snapshot_id,
+            "timestamp": snapshot.timestamp.isoformat(),
+            "source": snapshot.source,
+            "follower_count": snapshot.follower_count(),
+            "following_count": snapshot.following_count(),
+        },
+        "followers": [
+            {"pk": a.pk, "username": a.username, "full_name": a.full_name}
+            for a in snapshot.followers
+        ],
+        "following": [
+            {"pk": a.pk, "username": a.username, "full_name": a.full_name}
+            for a in snapshot.following
+        ],
+    }
+
+    # Compute relationship views
+    views = compute_views(snapshot)
+    payload["relationships"] = {
+        "mutuals": [a.username for a in views.mutuals],
+        "not_following_back": [a.username for a in views.not_following_back],
+        "not_followed_back": [a.username for a in views.not_followed_back],
+    }
+
+    # Get diff if we have multiple snapshots
+    snapshots = dao.get_snapshots(limit=2)
+    if len(snapshots) >= 2:
+        old_snapshot = dao.get_snapshot_by_id(snapshots[1][0])
+        if old_snapshot:
+            diff = compute_diff(old_snapshot, snapshot)
+            payload["diff"] = {
+                "new_followers": [a.username for a in diff.new_followers],
+                "unfollowers": [a.username for a in diff.unfollowers],
+                "new_following": [a.username for a in diff.new_following],
+                "unfollowing": [a.username for a in diff.unfollowing],
+            }
+
+    conn.close()
+
+    # Push to cloud
+    click.echo("Encrypting and uploading...")
+
+    try:
+        client = SyncClient(api_url) if api_url else SyncClient()
+        result = client.push(payload, passphrase)
+        click.echo()
+        click.echo("Sync successful!")
+        click.echo(f"View at: https://dashboard-phi-three-98.vercel.app/sync")
+        click.echo(f"Use your passphrase to decrypt and view your data.")
+    except Exception as e:
+        click.echo(f"Error syncing: {e}", err=True)
+        sys.exit(1)
+
+
+@sync.command(name="status")
+@click.option(
+    "--passphrase",
+    "-p",
+    required=True,
+    help="Passphrase used when pushing",
+)
+@click.option(
+    "--api-url",
+    default=None,
+    help="Custom API URL",
+)
+def sync_status(passphrase: str, api_url: str | None) -> None:
+    """Check the status of your synced data."""
+    try:
+        from instagram_audit.sync import SyncClient
+    except ImportError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+    try:
+        client = SyncClient(api_url) if api_url else SyncClient()
+        status = client.status(passphrase)
+
+        if not status:
+            click.echo("No synced data found for this passphrase.")
+            click.echo("Run 'audit sync push -p <passphrase>' to sync your data.")
+        else:
+            click.echo(f"Last synced: {status.get('updated_at', 'Unknown')}")
+            click.echo(f"Version: {status.get('version', 'Unknown')}")
+    except Exception as e:
+        click.echo(f"Error checking status: {e}", err=True)
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     cli(obj={})

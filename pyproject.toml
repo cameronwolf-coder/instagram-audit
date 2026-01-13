@@ -25,6 +25,10 @@ graph-api = [
 instaloader = [
     "instaloader>=4.10.0",
 ]
+sync = [
+    "cryptography>=41.0.0",
+    "requests>=2.31.0",
+]
 
 [project.scripts]
 audit = "instagram_audit.cli:cli"
