@@ -42,41 +42,105 @@ class SnapshotDAO:
     def _save_accounts(self, accounts: set[AccountIdentity], timestamp: datetime) -> None:
         """Save or update accounts."""
         timestamp_str = timestamp.isoformat()
+        accounts_list = list(accounts)
+        chunk_size = 900
 
-        for account in accounts:
-            # Check if account exists
+        for i in range(0, len(accounts_list), chunk_size):
+            chunk = accounts_list[i : i + chunk_size]
+            pks = [acc.pk for acc in chunk]
+            placeholders = ",".join(["?"] * len(pks))
+
             cursor = self.conn.cursor()
-            cursor.execute("SELECT username, first_seen FROM accounts WHERE pk = ?", (account.pk,))
-            row = cursor.fetchone()
+            cursor.execute(
+                f"SELECT pk, username, first_seen FROM accounts WHERE pk IN ({placeholders})",
+                pks,
+            )
+            existing_map = {row["pk"]: row for row in cursor.fetchall()}
 
-            if row:
-                old_username = row["username"]
-                first_seen = row["first_seen"]
+            to_insert = []
+            to_update = []
+            history_entries = []
 
-                # Update last_seen and username
-                cursor.execute(
+            for account in chunk:
+                if account.pk in existing_map:
+                    row = existing_map[account.pk]
+                    old_username = row["username"]
+                    first_seen = row["first_seen"]
+
+                    to_update.append(
+                        (account.username, account.full_name, timestamp_str, account.pk)
+                    )
+
+                    if old_username != account.username:
+                        # Update old username history
+                        history_entries.append(
+                            (
+                                account.pk,
+                                old_username,
+                                first_seen,
+                                timestamp_str,
+                                timestamp_str,
+                            )
+                        )
+                        # Add new username history
+                        history_entries.append(
+                            (
+                                account.pk,
+                                account.username,
+                                timestamp_str,
+                                timestamp_str,
+                                timestamp_str,
+                            )
+                        )
+                else:
+                    to_insert.append(
+                        (
+                            account.pk,
+                            account.username,
+                            account.full_name,
+                            timestamp_str,
+                            timestamp_str,
+                        )
+                    )
+                    # Initial history entry
+                    history_entries.append(
+                        (
+                            account.pk,
+                            account.username,
+                            timestamp_str,
+                            timestamp_str,
+                            timestamp_str,
+                        )
+                    )
+
+            if to_insert:
+                cursor.executemany(
+                    """
+                    INSERT INTO accounts (pk, username, full_name, first_seen, last_seen)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    to_insert,
+                )
+
+            if to_update:
+                cursor.executemany(
                     """
                     UPDATE accounts
                     SET username = ?, full_name = ?, last_seen = ?
                     WHERE pk = ?
                     """,
-                    (account.username, account.full_name, timestamp_str, account.pk),
+                    to_update,
                 )
 
-                # Track username change
-                if old_username != account.username:
-                    self._save_username_history(account.pk, old_username, first_seen, timestamp_str)
-                    self._save_username_history(account.pk, account.username, timestamp_str, timestamp_str)
-            else:
-                # New account
-                cursor.execute(
+            if history_entries:
+                cursor.executemany(
                     """
-                    INSERT INTO accounts (pk, username, full_name, first_seen, last_seen)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO username_history (account_pk, username, first_seen, last_seen)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(account_pk, username) DO UPDATE SET last_seen = ?
                     """,
-                    (account.pk, account.username, account.full_name, timestamp_str, timestamp_str),
+                    history_entries,
                 )
-                self._save_username_history(account.pk, account.username, timestamp_str, timestamp_str)
 
     def _save_username_history(
         self, account_pk: str, username: str, first_seen: str, last_seen: str

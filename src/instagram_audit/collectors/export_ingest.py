@@ -85,23 +85,11 @@ class ExportIngestCollector(Collector):
 
     def collect(self) -> Snapshot:
         """Collect snapshot from export files."""
-        followers = self._parse_file(self.followers_file)
-        following = self._parse_file(self.following_file)
+        followers, followers_ts = self._parse_file(self.followers_file)
+        following, following_ts = self._parse_file(self.following_file)
 
         # Use the most recent timestamp from either file
-        all_timestamps = []
-        for account_data in self._load_raw_data(self.followers_file):
-            if "string_list_data" in account_data:
-                for item in account_data["string_list_data"]:
-                    if "timestamp" in item:
-                        all_timestamps.append(item["timestamp"])
-
-        for account_data in self._load_raw_data(self.following_file):
-            if "string_list_data" in account_data:
-                for item in account_data["string_list_data"]:
-                    if "timestamp" in item:
-                        all_timestamps.append(item["timestamp"])
-
+        all_timestamps = followers_ts + following_ts
         if all_timestamps:
             timestamp = datetime.fromtimestamp(max(all_timestamps))
         else:
@@ -132,9 +120,10 @@ class ExportIngestCollector(Collector):
         else:
             raise ValueError(f"Unexpected JSON format in {file_path}")
 
-    def _parse_file(self, file_path: Path) -> set[AccountIdentity]:
-        """Parse Instagram export JSON file into AccountIdentity set."""
+    def _parse_file(self, file_path: Path) -> tuple[set[AccountIdentity], list[int]]:
+        """Parse Instagram export JSON file into AccountIdentity set and timestamps."""
         accounts = set()
+        timestamps = []
         data = self._load_raw_data(file_path)
 
         for entry in data:
@@ -161,6 +150,10 @@ class ExportIngestCollector(Collector):
             for item in entry["string_list_data"]:
                 username = item.get("value")
                 href = item.get("href", "")
+                ts = item.get("timestamp")
+
+                if ts:
+                    timestamps.append(ts)
 
                 if not username:
                     continue
@@ -177,7 +170,7 @@ class ExportIngestCollector(Collector):
                     )
                 )
 
-        return accounts
+        return accounts, timestamps
 
     def _extract_pk_from_href(self, href: str, username: str) -> str:
         """Extract pk from href or use username as fallback.

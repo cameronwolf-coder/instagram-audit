@@ -46,3 +46,4 @@ reports/*.html
 # Instagram exports
 instagram-export/
 exports/
+.vercel
