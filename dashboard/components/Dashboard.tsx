@@ -32,9 +32,9 @@ export default function Dashboard({ data, onReset }: Props) {
   const followersSet = new Set(latestSnapshot?.followers.map((f: any) => f.username) || []);
   const followingSet = new Set(latestSnapshot?.following.map((f: any) => f.username) || []);
 
-  const mutuals = Array.from(followersSet).filter((u) => followingSet.has(u));
-  const notFollowingBack = Array.from(followersSet).filter((u) => !followingSet.has(u));
-  const notFollowedBack = Array.from(followingSet).filter((u) => !followersSet.has(u));
+  const mutuals: string[] = Array.from(followersSet).filter((u) => followingSet.has(u)) as string[];
+  const notFollowingBack: string[] = Array.from(followersSet).filter((u) => !followingSet.has(u)) as string[];
+  const notFollowedBack: string[] = Array.from(followingSet).filter((u) => !followersSet.has(u)) as string[];
 
   // Calculate change from first snapshot
   let followerGrowth = 0;
