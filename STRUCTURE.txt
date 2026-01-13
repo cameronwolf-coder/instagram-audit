@@ -1,0 +1,292 @@
+Instagram Audit - Project Structure
+====================================
+
+instagram-audit/
+│
+├── Documentation
+│   ├── README.md                   # Main documentation
+│   ├── QUICKSTART.md              # 5-minute getting started guide
+│   ├── EXAMPLE.md                 # Detailed usage examples
+│   ├── PROJECT_SUMMARY.md         # Technical overview and architecture
+│   ├── STRUCTURE.txt              # This file
+│   └── LICENSE                    # MIT License
+│
+├── Configuration
+│   ├── pyproject.toml             # Python project configuration & dependencies
+│   └── .gitignore                 # Git ignore patterns
+│
+├── Source Code (src/instagram_audit/)
+│   │
+│   ├── __init__.py                # Package initialization
+│   ├── cli.py                     # Command-line interface (319 lines)
+│   │                               Commands: run, diff, views, verify, list
+│   │
+│   ├── core/                      # Core data types (364 lines)
+│   │   ├── __init__.py
+│   │   └── types.py                # AccountIdentity, Snapshot, DiffResult,
+│   │                                 VerificationStatus, MissingAccount, etc.
+│   │
+│   ├── collectors/                # Data collection (378 lines)
+│   │   ├── __init__.py
+│   │   ├── base.py                 # Abstract Collector interface
+│   │   ├── export_ingest.py        # Instagram export parser (primary method)
+│   │   └── graph_api.py            # Graph API client (optional, limited)
+│   │
+│   ├── storage/                   # Persistence layer (418 lines)
+│   │   ├── __init__.py
+│   │   ├── schema.py               # SQLite schema definition & initialization
+│   │   └── dao.py                  # Data Access Objects (SnapshotDAO, VerificationDAO)
+│   │
+│   ├── diff/                      # Diff computation (227 lines)
+│   │   ├── __init__.py
+│   │   └── engine.py               # Set-based diff algorithm
+│   │                                 compute_diff, compute_views, find_missing_accounts
+│   │
+│   ├── verify/                    # Verification queue (123 lines)
+│   │   ├── __init__.py
+│   │   └── queue.py                # Interactive account verification system
+│   │
+│   └── report/                    # Report generation (770 lines)
+│       ├── __init__.py
+│       ├── cli.py                  # CLI report formatting
+│       └── html.py                 # HTML report generation with Jinja2
+│
+├── Tests (tests/)                 # Test suite (673 lines, 37 tests)
+│   ├── __init__.py
+│   ├── test_diff.py               # Diff engine tests (13 tests)
+│   ├── test_export_ingest.py      # Export parsing tests (9 tests)
+│   ├── test_rename_cases.py       # Username change edge cases (12 tests)
+│   └── test_workflow.py           # Integration tests (3 tests)
+│
+└── Generated Files (not in repo)
+    ├── instagram_audit.db         # SQLite database (user data)
+    ├── reports/*.html             # Generated HTML reports
+    └── build/dist/                # Build artifacts
+
+Database Schema
+===============
+
+snapshots
+    ├── id (PK)
+    ├── timestamp
+    ├── source (export/graph_api)
+    ├── follower_count
+    └── following_count
+
+accounts
+    ├── pk (PK)                    # Stable Instagram user ID
+    ├── username                   # Current username
+    ├── full_name
+    ├── first_seen
+    └── last_seen
+
+snapshot_followers
+    ├── snapshot_id (FK)
+    └── account_pk (FK)
+
+snapshot_following
+    ├── snapshot_id (FK)
+    └── account_pk (FK)
+
+username_history
+    ├── account_pk (FK)
+    ├── username (PK)
+    ├── first_seen
+    └── last_seen
+
+verification_queue
+    ├── id (PK)
+    ├── account_pk (FK)
+    ├── last_seen
+    ├── first_missing
+    ├── status (pending/blocked/deactivated/renamed/unfollowed/unknown)
+    ├── new_username
+    └── notes
+
+CLI Commands
+============
+
+audit run --input <path>           # Create snapshot from export
+audit diff [--latest]              # Compare snapshots
+audit views [--snapshot-id N]      # Show relationship views
+audit verify                       # Classify missing accounts
+audit list [--limit N]             # List all snapshots
+
+Global Options:
+  --db <path>                      # Use alternate database
+  --help                           # Show help
+
+Command Options:
+  --html / --no-html               # Generate HTML report (default: true)
+  --old-id N --new-id N            # Compare specific snapshots
+
+Key Features
+============
+
+✅ Snapshot System
+   - Point-in-time captures of followers/following
+   - SQLite storage with schema versioning
+   - Efficient querying with indexes
+
+✅ Diff Engine
+   - Deterministic set-based comparisons
+   - Detects: new followers, unfollowers, new following, unfollowing
+   - Username change tracking (pk-based identity)
+   - Edge case handling (renames, swaps, etc.)
+
+✅ Relationship Views
+   - Mutuals (follow each other)
+   - Not following back (they follow you, you don't follow them)
+   - Not followed back (you follow them, they don't follow you)
+
+✅ Verification Queue
+   - Classify missing accounts
+   - Categories: blocked, deactivated, renamed, unfollowed, unknown
+   - Interactive CLI workflow
+   - Persistent storage
+
+✅ Reports
+   - CLI: Formatted terminal output
+   - HTML: Instagram-styled web reports
+   - Mobile-responsive design
+   - Summary cards, sortable tables
+
+✅ Safety & Privacy
+   - Local-first (all data stays on machine)
+   - No authentication required
+   - Uses official Instagram exports
+   - Read-only, no Instagram modifications
+
+Test Coverage
+=============
+
+37 tests covering:
+  ✅ Diff computation (new followers, unfollowers, etc.)
+  ✅ Username changes (13 edge cases)
+  ✅ Export parsing (multiple formats)
+  ✅ Complete workflows (baseline to diff to verification)
+  ✅ Empty snapshots and edge cases
+  ✅ Set-based determinism
+
+100% pass rate
+
+Code Metrics
+============
+
+Total Lines:      ~3,272
+Source Code:      ~2,599 (80%)
+Tests:            ~673 (20%)
+Documentation:    ~1,200 lines across 5 files
+
+Modules:
+  CLI:            319 lines
+  Reports:        770 lines
+  Storage:        418 lines
+  Collectors:     378 lines
+  Core Types:     364 lines
+  Diff Engine:    227 lines
+  Verification:   123 lines
+
+Dependencies
+============
+
+Required:
+  - click >= 8.1.7          (CLI framework)
+  - jinja2 >= 3.1.2         (HTML templating)
+
+Development:
+  - pytest >= 7.4.0         (Testing)
+  - pytest-cov >= 4.1.0     (Coverage)
+  - mypy >= 1.5.0           (Type checking)
+
+Optional:
+  - requests >= 2.31.0      (Graph API support)
+
+Installation
+============
+
+Basic:
+  pip install -e .
+
+Development:
+  pip install -e ".[dev]"
+
+With Graph API:
+  pip install -e ".[graph-api]"
+
+Full:
+  pip install -e ".[dev,graph-api]"
+
+Usage Example
+=============
+
+# Week 1: Create baseline
+audit run --input ~/instagram-export-week1/
+# Output: Snapshot saved with ID: 1
+
+# Week 2: Track changes
+audit run --input ~/instagram-export-week2/
+# Output:
+#   New followers: 5
+#   Unfollowers: 2
+#   Username changes: 1
+
+# View detailed diff
+audit diff --latest
+
+# Classify missing accounts
+audit verify
+
+# Check current relationships
+audit views
+
+# Open HTML report
+open reports/2024-01-15.html
+
+Architecture Principles
+=======================
+
+1. Safety First
+   - Official APIs only
+   - No automation that could trigger bans
+   - Read-only operations
+
+2. Privacy First
+   - Local storage only
+   - No external communication
+   - No telemetry
+
+3. Deterministic
+   - Set-based math for diffs
+   - Reproducible results
+   - Comprehensive tests
+
+4. Extensible
+   - Pluggable collectors
+   - Clear module separation
+   - Schema versioning
+
+5. User-Friendly
+   - Beautiful HTML reports
+   - Clear CLI output
+   - Interactive workflows
+   - Helpful error messages
+
+Future Enhancements
+===================
+
+Potential improvements:
+  - Export automation (if safe)
+  - Better username detection for exports
+  - Data visualization charts
+  - Trend analysis
+  - CSV/PDF exports
+  - Browser extension
+  - Multi-account dashboard
+
+License
+=======
+
+MIT License - See LICENSE file
+
+For more information, see README.md
