@@ -88,7 +88,7 @@ export default function DatabaseUpload({ onDataLoaded }: Props) {
       `);
 
       const verification = verificationResult[0]?.values.reduce((acc, row) => {
-        acc[row[0] as string] = row[1];
+        acc[row[0] as string] = row[1] as number;
         return acc;
       }, {} as Record<string, number>) || {};
 
