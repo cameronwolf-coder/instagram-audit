@@ -8,7 +8,7 @@ except ImportError:
     print("Error: click is required. Install with: pip install click")
     sys.exit(1)
 
-from instagram_audit.collectors import ExportIngestCollector
+from instagram_audit.collectors import ExportIngestCollector, INSTALOADER_AVAILABLE
 from instagram_audit.storage import initialize_database, get_connection, SnapshotDAO, VerificationDAO
 from instagram_audit.diff import compute_diff, compute_views, find_missing_accounts
 from instagram_audit.report import (
@@ -278,6 +278,213 @@ def list(ctx: click.Context, limit: int) -> None:
             )
 
     conn.close()
+
+
+# Instaloader-based commands (live data collection)
+@cli.group()
+def live() -> None:
+    """Live data collection using Instaloader."""
+    if not INSTALOADER_AVAILABLE:
+        click.echo(
+            "Error: Instaloader is not installed. Install with: pip install instagram-audit[instaloader]",
+            err=True,
+        )
+        sys.exit(1)
+
+
+@live.command(name="login")
+@click.option(
+    "--username",
+    "-u",
+    required=True,
+    help="Instagram username to login with",
+)
+@click.option(
+    "--session-file",
+    "-s",
+    type=click.Path(path_type=Path),
+    default=Path.home() / ".instagram_audit_session",
+    help="Path to save session file",
+    show_default=True,
+)
+def live_login(username: str, session_file: Path) -> None:
+    """Login to Instagram and save session for future use."""
+    if not INSTALOADER_AVAILABLE:
+        click.echo(
+            "Error: Instaloader is not installed. Install with: pip install instagram-audit[instaloader]",
+            err=True,
+        )
+        sys.exit(1)
+
+    from instagram_audit.collectors import InstaLoaderCollector
+    import getpass
+
+    password = getpass.getpass(f"Password for {username}: ")
+
+    click.echo(f"Logging in as {username}...")
+
+    try:
+        collector = InstaLoaderCollector(
+            target_username=username,
+            session_file=session_file,
+            login_username=username,
+            login_password=password,
+        )
+        collector._login()
+        click.echo(f"Login successful! Session saved to: {session_file}")
+    except Exception as e:
+        click.echo(f"Login failed: {e}", err=True)
+        sys.exit(1)
+
+
+@live.command(name="profile")
+@click.argument("username")
+def live_profile(username: str) -> None:
+    """Show profile information for a public Instagram account."""
+    if not INSTALOADER_AVAILABLE:
+        click.echo(
+            "Error: Instaloader is not installed. Install with: pip install instagram-audit[instaloader]",
+            err=True,
+        )
+        sys.exit(1)
+
+    from instagram_audit.collectors import InstaLoaderCollector
+
+    click.echo(f"Fetching profile info for @{username}...")
+
+    try:
+        collector = InstaLoaderCollector(target_username=username)
+        info = collector.collect_profile_info()
+
+        click.echo()
+        click.echo(f"Username:   @{info['username']}")
+        click.echo(f"User ID:    {info['user_id']}")
+        click.echo(f"Full Name:  {info['full_name'] or '(not set)'}")
+        click.echo(f"Bio:        {info['biography'][:100] + '...' if len(info['biography'] or '') > 100 else info['biography'] or '(not set)'}")
+        click.echo(f"Followers:  {info['follower_count']:,}")
+        click.echo(f"Following:  {info['following_count']:,}")
+        click.echo(f"Posts:      {info['post_count']:,}")
+        click.echo(f"Private:    {'Yes' if info['is_private'] else 'No'}")
+        click.echo(f"Verified:   {'Yes' if info['is_verified'] else 'No'}")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@live.command(name="collect")
+@click.option(
+    "--username",
+    "-u",
+    required=True,
+    help="Your Instagram username",
+)
+@click.option(
+    "--session-file",
+    "-s",
+    type=click.Path(path_type=Path),
+    default=Path.home() / ".instagram_audit_session",
+    help="Path to session file",
+    show_default=True,
+)
+@click.option(
+    "--html/--no-html",
+    default=True,
+    help="Generate HTML report",
+    show_default=True,
+)
+@click.pass_context
+def live_collect(ctx: click.Context, username: str, session_file: Path, html: bool) -> None:
+    """Collect live followers/following data (requires login).
+
+    This collects your current followers and following list directly from Instagram.
+    You must be logged in first using 'audit live login'.
+    """
+    if not INSTALOADER_AVAILABLE:
+        click.echo(
+            "Error: Instaloader is not installed. Install with: pip install instagram-audit[instaloader]",
+            err=True,
+        )
+        sys.exit(1)
+
+    if not session_file.exists():
+        click.echo(
+            f"Error: No session file found at {session_file}. Please login first with: audit live login -u {username}",
+            err=True,
+        )
+        sys.exit(1)
+
+    from instagram_audit.collectors import InstaLoaderCollector
+
+    db_path = ctx.obj["db_path"]
+
+    click.echo(f"Collecting live data for @{username}...")
+    click.echo("This may take a while depending on your follower/following count.")
+    click.echo()
+
+    try:
+        collector = InstaLoaderCollector(
+            target_username=username,
+            session_file=session_file,
+            login_username=username,
+        )
+        snapshot = collector.collect()
+    except Exception as e:
+        click.echo(f"Error collecting data: {e}", err=True)
+        sys.exit(1)
+
+    click.echo(f"Snapshot timestamp: {snapshot.timestamp}")
+    click.echo(f"Followers: {snapshot.follower_count()}")
+    click.echo(f"Following: {snapshot.following_count()}")
+    click.echo()
+
+    # Save snapshot
+    conn = get_connection(db_path)
+    dao = SnapshotDAO(conn)
+    snapshot_id = dao.save_snapshot(snapshot)
+
+    click.echo(f"Snapshot saved with ID: {snapshot_id}")
+
+    # Check for previous snapshot and compute diff
+    snapshots = dao.get_snapshots(limit=2)
+    if len(snapshots) >= 2:
+        click.echo("\nComputing diff from previous snapshot...")
+
+        old_snapshot = dao.get_snapshot_by_id(snapshots[1][0])
+        if old_snapshot:
+            diff = compute_diff(old_snapshot, snapshot)
+
+            click.echo("\n" + "=" * 60)
+            click.echo("CHANGES SINCE LAST SNAPSHOT")
+            click.echo("=" * 60)
+            click.echo(f"New followers:    {len(diff.new_followers)}")
+            click.echo(f"Unfollowers:      {len(diff.unfollowers)}")
+            click.echo(f"New following:    {len(diff.new_following)}")
+            click.echo(f"Unfollowing:      {len(diff.unfollowing)}")
+            click.echo(f"Username changes: {len(diff.username_changes)}")
+
+            # Check for missing accounts
+            missing = find_missing_accounts(old_snapshot, snapshot)
+            if missing:
+                click.echo(f"\n{len(missing)} accounts are missing (may be blocked, deactivated, or renamed)")
+                click.echo("Run 'audit verify' to classify them.")
+
+                # Add to verification queue
+                verification_dao = VerificationDAO(conn)
+                queue = VerificationQueue(verification_dao)
+
+                for account in missing:
+                    queue.add_missing_account(
+                        account,
+                        old_snapshot.timestamp,
+                        snapshot.timestamp,
+                    )
+
+            if html:
+                report_path = generate_diff_html(diff)
+                click.echo(f"\nHTML report: {report_path.absolute()}")
+
+    conn.close()
+    click.echo("\nDone!")
 
 
 if __name__ == "__main__":
