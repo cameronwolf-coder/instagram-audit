@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { Upload, Database, TrendingUp, Users, UserCheck } from "lucide-react";
-import DatabaseUpload from "@/components/DatabaseUpload";
-import Dashboard from "@/components/Dashboard";
+import DatabaseUpload from "../components/DatabaseUpload";
+import Dashboard from "../components/Dashboard";
 
 export default function Home() {
   const [dbData, setDbData] = useState<any>(null);
